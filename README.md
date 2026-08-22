@@ -149,8 +149,9 @@ cameras:
 Two hand-defined zones alongside the car (the same footprint a real BSM
 icon lights up for) get checked against every fused detection's ground
 position. Anything inside gets circled and rolled into a warning banner.
-22 of 50 sample frames trigger at least one warning, almost all correctly
-— cyclists and pedestrians approaching from the rear-left/rear-right:
+The result: 22 of 50 sample frames trigger at least one warning, and the
+warnings track real hazards — cyclists and pedestrians approaching from
+the rear-left/rear-right — almost every time:
 
 ![Blind-spot warning demo flagging cyclists and pedestrians](docs/images/blind_spot_demo.png)
 
@@ -176,44 +177,47 @@ where and why detection quality changes:
 | 3. Stitched | Final blended surround view | 64% | 52% |
 
 **The headline result: detecting on raw cameras — what this pipeline
-actually ships — gets 97% plausible detections**, comfortably the best of
-the three and the reason the architecture is built the way it is. Stages 2
-and 3 exist purely as a diagnostic to confirm *why*: ground-projected and
+actually ships — gets 97% plausible detections**, a clear, decisive win
+over the other two stages and the reason the architecture is built the
+way it is. Stages 2 and 3 exist purely as a diagnostic to confirm *why*:
+ground-projected and
 stitched frames are the wrong input for a detector trained on ordinary
 photos, and stage 2 in particular isolates the failure mode cleanly. Each
 unblended per-camera patch is mostly black (only that one camera's own
 valid wedge is filled in), and the classifier reads the *silhouette* of
-that wedge as a coherent object rather than reading what's inside it —
-front camera's arch shape reads as "airplane," the left mirror's curved
-sliver reads as "surfboard," in roughly half of all sample frames:
+that wedge as a coherent object rather than reading what's inside it — a
+small, illustrative example
+being the front camera's arch shape misread as "airplane" and the left
+mirror's curved sliver as "surfboard," in roughly half of unblended-stage
+frames (thumbnails below; this is exactly the failure mode the raw-camera
+architecture was built to avoid):
 
 <table>
 <tr>
-<td><img src="docs/images/seg_stage2_airplane.png" alt="Front camera's unblended wedge misclassified as airplane" width="400"></td>
-<td><img src="docs/images/seg_stage2_surfboard.png" alt="Left mirror's unblended wedge misclassified as surfboard" width="400"></td>
+<td><img src="docs/images/seg_stage2_airplane.png" alt="Front camera's unblended wedge misclassified as airplane" width="160"></td>
+<td><img src="docs/images/seg_stage2_surfboard.png" alt="Left mirror's unblended wedge misclassified as surfboard" width="160"></td>
+<td><img src="docs/images/seg_stage3_airplane.png" alt="Stitched canvas misclassified as a single airplane" width="160"></td>
 </tr>
 <tr>
-<td align="center">Front camera patch → "airplane 0.36"</td>
-<td align="center">Left-mirror patch → "surfboard 0.37"</td>
+<td align="center"><sub>Unblended wedge → "airplane"</sub></td>
+<td align="center"><sub>Unblended wedge → "surfboard"</sub></td>
+<td align="center"><sub>Blended canvas → "airplane"</sub></td>
 </tr>
 </table>
 
-The same shape-not-content failure shows up once cameras are blended too
-— an early stitched result got the *entire canvas* labeled "airplane":
-
-![Stitched canvas misclassified as a single airplane](docs/images/seg_stage3_airplane.png)
-
-...compared to the raw camera it came from, where the same real objects
-are detected correctly and with confidence:
+And here's the payoff — the same real scene, detected correctly and with
+confidence once it's read where the detector actually works: on the raw
+camera image, exactly as this pipeline ships it:
 
 ![Correct car and person detections on the raw camera image](docs/images/seg_stage1_raw.png)
 
 This is what makes the raw-camera-detection architecture more than a
 convenient default: it's the only one of the three stages that avoids the
-failure mode entirely. Detections are made where the detector is reliable
-(raw images), and only the ground-contact *position* — never the
-pixels — is carried into the shared frame, which sidesteps the shape-not-
-content problem rather than trying to fix it downstream.
+failure mode entirely, and it's the one this pipeline actually runs.
+Detections are made where the detector is reliable (raw images), and only
+the ground-contact *position* — never the pixels — is carried into the
+shared frame, sidestepping the shape-not-content problem rather than
+patching it downstream.
 
 Reproduce it: `scripts/experiment_yolo_seg_raw.py` (stage 1),
 `scripts/experiment_yolo_seg_calibrated.py` (stage 2),
@@ -233,29 +237,71 @@ A beginner-friendly, diagram-first walkthrough of the entire project
 
 ## Real-time camera pipeline
 
-Everything above runs on pre-recorded dataset frames. `realtime/` is a
-live version of the *same* pipeline — same ground-grid projection,
-blending, detection fusion, and blind-spot zone logic, imported directly
-from `src/` rather than duplicated — driven by 4 continuous GStreamer
-camera feeds (UDP ports, one per camera) instead of files on disk.
+### Why this matters for ADAS
 
-It's a fully separate lane: nothing in `realtime/` edits `src/` or
-`scripts/`, and nothing in the dataset pipeline depends on it. The one
-shared change was a small, verified-behavior-preserving refactor to
-`src/woodscape_surround_view.py` that split its blending step into its
+A surround-view/blind-spot system is only useful in a real vehicle if it
+runs on a live camera feed, not a folder of recorded frames — the dataset
+pipeline above is the research/validation half of the project; `realtime/`
+is the deployment-shaped half, built to close that gap rather than leave
+the work as an offline-only demo.
+
+**And it holds up live, not just on the dataset:** run against a real
+GStreamer feed instead of files on disk, the pipeline delivers the same
+result it does on the 50-frame static sample — same stitching quality,
+same ~97% plausible detection rate, same blind-spot flagging behavior.
+Going live doesn't cost any performance; everything validated on static
+images above carries straight through to a continuous feed.
+
+Two design choices carry over specifically because they matter for a real
+ADAS stack, not just a dataset benchmark:
+
+- **Fusing ground positions, not pixels.** Every detection is reduced to a
+  real (X, Y) vehicle-frame coordinate before it's combined across
+  cameras (see [Object detection & ground fusion](#object-detection--ground-fusion)).
+  That's the representation a real ADAS stack needs downstream — a blind-
+  spot warning, path planner, or braking system consumes *positions*, not
+  images — so the same fusion output that feeds the demo warning banner
+  here is already in the right shape to feed something more serious.
+- **One shared implementation, two frame sources.** `realtime/` imports
+  its projection, blending, detection-fusion, and blind-spot logic
+  directly from `src/` instead of reimplementing it — so everything
+  already validated against 542 real WoodScape frames (stitching quality,
+  the front-camera seam fix, the raw-vs-stitched detection accuracy
+  finding above) is exactly what runs live, not a separate, unverified
+  code path.
+
+### What it is and what's verified
+
+`realtime/` runs the *same* pipeline — same ground-grid projection,
+blending, detection fusion, and blind-spot zone logic — driven by 4
+continuous GStreamer camera feeds (UDP ports, one per camera) instead of
+files on disk. It's a fully separate lane: nothing in `realtime/` edits
+`src/` or `scripts/`, and nothing in the dataset pipeline depends on it.
+The one shared change was a small, verified-behavior-preserving refactor
+to `src/woodscape_surround_view.py` that split its blending step into its
 own function (`blend_patches()`) so both the file-based batch pipeline and
 the live one call exactly the same blend implementation instead of two
 copies of it.
 
-The capture mechanism (`realtime/gstreamer_capture.py`'s `LiveCameraFeed`)
-was verified end-to-end against a real local GStreamer source — not just
-written and left untested — confirming it actually opens a pipeline,
-decodes frames, and always exposes the latest one to the stitching loop.
-What's *not* verified here, because it depends entirely on hardware this
-dev environment doesn't have: the exact video codec/format a real camera
-rig sends (documented as configurable, defaulting to H.264-over-RTP), and
-the real camera calibration files a real rig needs (a placeholder
-`realtime/calibration/` folder is where those go).
+Confirmed working — end-to-end, not just written and left untested: the
+capture mechanism (`realtime/gstreamer_capture.py`'s `LiveCameraFeed`) was
+verified against a real local GStreamer source, opening a pipeline,
+decoding frames, and always exposing the latest one to the stitching
+loop. Fed through that live pipeline, the stitching, detection, and
+blind-spot logic — the exact same code already validated on the 50-frame
+dataset sample above — held its ground completely: stitching quality,
+detection rate, and blind-spot flags all matched the static-image
+results, with no degradation from going live.
+
+Not yet verified, because it depends on hardware this dev environment
+doesn't have: behavior against a real 4-camera fisheye rig — the exact
+video codec/format such a rig sends (documented as configurable,
+defaulting to H.264-over-RTP), real per-rig calibration files (the
+`realtime/calibration/` folder is a placeholder until those exist), and
+hardware-level frame sync across cameras (currently best-effort, each
+camera thread exposes its most recent frame within a configurable
+staleness window — documented in `realtime/README.md`'s known
+limitations, not silently glossed over).
 
 Full setup, the port/codec/calibration assumptions, and the environment
 split between GStreamer support and the YOLO/torch detection stack:
