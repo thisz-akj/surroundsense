@@ -160,22 +160,32 @@ positives) are in [`docs/blind_spot_monitoring.md`](docs/blind_spot_monitoring.m
 
 ## Segmentation performance across the pipeline
 
-A 3-way controlled comparison: run the *same* detector on the same scenes
-at 3 different points in the pipeline, to isolate exactly where and why
-detection quality changes.
+Detection in this project runs on each camera's **raw** fisheye image, not
+the stitched canvas (see [Object detection & ground fusion](#object-detection--ground-fusion))
+— this section is the controlled experiment that led to and validates that
+design choice.
+
+Same detector (YOLO11n-seg, stock pretrained COCO weights, no fine-tuning),
+same scenes, run at 3 different points in the pipeline to isolate exactly
+where and why detection quality changes:
 
 | Stage | What it is | Plausible detections | Frames with zero detections |
 |---|---|---|---|
-| 1. Raw | Straight off each camera | **97%** | 9.5% |
+| 1. Raw (production path) | Straight off each camera | **97%** | 9.5% |
 | 2. Calibrated, pre-stitch | One camera's own ground-projected patch, not yet blended | 58% | 50.5% |
 | 3. Stitched | Final blended surround view | 64% | 52% |
 
-Stage 2 — not stage 3 — turns out to be the worst. Each unblended
-per-camera patch is mostly black (only that one camera's own valid wedge is
-filled in), and the classifier reads the *silhouette* of that wedge as a
-coherent object rather than reading what's inside it — front camera's arch
-shape reads as "airplane," the left mirror's curved sliver reads as
-"surfboard," in roughly half of all sample frames:
+**The headline result: detecting on raw cameras — what this pipeline
+actually ships — gets 97% plausible detections**, comfortably the best of
+the three and the reason the architecture is built the way it is. Stages 2
+and 3 exist purely as a diagnostic to confirm *why*: ground-projected and
+stitched frames are the wrong input for a detector trained on ordinary
+photos, and stage 2 in particular isolates the failure mode cleanly. Each
+unblended per-camera patch is mostly black (only that one camera's own
+valid wedge is filled in), and the classifier reads the *silhouette* of
+that wedge as a coherent object rather than reading what's inside it —
+front camera's arch shape reads as "airplane," the left mirror's curved
+sliver reads as "surfboard," in roughly half of all sample frames:
 
 <table>
 <tr>
@@ -197,6 +207,13 @@ The same shape-not-content failure shows up once cameras are blended too
 are detected correctly and with confidence:
 
 ![Correct car and person detections on the raw camera image](docs/images/seg_stage1_raw.png)
+
+This is what makes the raw-camera-detection architecture more than a
+convenient default: it's the only one of the three stages that avoids the
+failure mode entirely. Detections are made where the detector is reliable
+(raw images), and only the ground-contact *position* — never the
+pixels — is carried into the shared frame, which sidesteps the shape-not-
+content problem rather than trying to fix it downstream.
 
 Reproduce it: `scripts/experiment_yolo_seg_raw.py` (stage 1),
 `scripts/experiment_yolo_seg_calibrated.py` (stage 2),
