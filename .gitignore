@@ -1,0 +1,20 @@
+# Third-party cloned repos -- see README for how to fetch these yourself
+external/
+
+# Raw WoodScape dataset -- not ours to redistribute, download separately
+data/woodscape/
+
+# Downloaded model weights (small, auto-fetched by ultralytics on first run)
+models/*.pt
+
+# All generated outputs -- regenerate via scripts/, see README
+outputs/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Jupyter
+.ipynb_checkpoints/

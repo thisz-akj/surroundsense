@@ -1,0 +1,10 @@
+# Only needed for the detection / blind-spot-monitoring side of the project
+# (scripts/experiment_yolo_seg*.py, scripts/experiment_blind_spot_demo.py) and
+# for the LoFTR technique in scripts/experiment_matching_shootout.py. The
+# core stitching pipeline (requirements.txt) does not need any of this.
+# Recommended in a separate virtualenv -- these are large (~1.5GB with CPU
+# torch wheels).
+torch>=2.0
+torchvision>=0.15
+kornia>=0.8
+ultralytics>=8.4
