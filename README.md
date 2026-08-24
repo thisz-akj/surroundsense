@@ -1,4 +1,4 @@
-# WoodScape Surround-View Stitching & Blind-Spot Monitoring
+# Car Surround-View Stitching & Blind-Spot Monitoring
 
 Turns 4 fisheye cameras from the [WoodScape](https://github.com/valeoai/WoodScape)
 dataset (front, rear, left-mirror, right-mirror) into a single 360° top-down
@@ -67,7 +67,7 @@ data/woodscape/
 ```
 
 The YOLO segmentation model (`models/yolo11n-seg.pt`) downloads
-automatically the first time any detection script runs.
+automatically the first time any detection script runs .
 
 Every `scripts/*.py` file adds `src/` to `sys.path` itself and reads all
 paths from `src/paths.py` (computed relative to the repo root) — nothing
