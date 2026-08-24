@@ -21,6 +21,7 @@ exactly how it was fixed, not just the final result.
 8. [Segmentation performance across the pipeline](#segmentation-performance-across-the-pipeline)
 9. [Feature-matching technique shootout](#feature-matching-technique-shootout)
 10. [Real-time camera pipeline](#real-time-camera-pipeline)
+    - [Camera acquisition hardware pipeline (MLSoC)](#camera-acquisition-hardware-pipeline-mlsoc)
 11. [Known limitations](#known-limitations)
 12. [Read this next](#read-this-next)
 
@@ -242,6 +243,52 @@ runs on a live camera feed, not a folder of recorded frames — the dataset
 pipeline above is the research/validation half of the project; `realtime/`
 is the deployment-shaped half, built to close that gap rather than leave
 the work as an offline-only demo.
+
+### Camera acquisition hardware pipeline (MLSoC)
+
+On the target MLSoC hardware, a frame doesn't appear out of nowhere — it
+comes off the physical sensor and through a fixed hardware/kernel chain
+before any of this project's code ever sees it:
+
+```
+Road
+ ↓
+Sony Sensor
+ ↓
+MIPI CSI-2
+ ↓
+CSI Receiver
+ ↓
+ISP
+ ↓
+V4L2 Media Framework
+ ↓
+GStreamer
+ ↓
+MLSoC Inference Engine
+```
+
+| Stage | What happens here |
+|---|---|
+| **Road** | The actual scene — vehicles, pedestrians, lane markings — the whole reason the rest of the chain exists. |
+| **Sony Sensor** | The Sony CMOS image sensor captures the scene as a raw Bayer frame — one photon count per photosite, not yet a viewable image. |
+| **MIPI CSI-2** | The high-speed serial interface that carries that raw pixel data off the sensor die and onto the SoC, lane by lane. |
+| **CSI Receiver** | The SoC-side hardware block that terminates those MIPI lanes and reassembles them into a pixel stream the chip can work with. |
+| **ISP** | The Image Signal Processor turns raw Bayer into a usable frame — demosaicing, auto-exposure, auto-white-balance, and noise reduction all happen here, in hardware, before a single line of this project's code runs. |
+| **V4L2 Media Framework** | The Linux kernel's Video4Linux2 subsystem exposes the ISP's output as a standard `/dev/videoX` device, with the sensor → ISP → capture chain wired together as a media graph. |
+| **GStreamer** | Userspace pulls frames off that V4L2 device (`v4l2src`) and moves them through a pipeline — the exact same GStreamer layer `realtime/` already builds on (see below). |
+| **MLSoC Inference Engine** | The dedicated ML accelerator silicon on the SoC where the detection model actually runs against incoming frames, in hardware, in the live deployment path. |
+
+This is the real hardware path a deployed unit runs end to end. The
+`realtime/` module in this repo speaks the same GStreamer language at the
+handoff point — it's built to sit on top of exactly this chain, consuming
+frames the way `v4l2src` → downstream elements would deliver them, rather
+than assuming some other, incompatible capture model. In this dev
+environment (no physical sensor or MLSoC accelerator attached),
+`realtime/` is fed by 4 GStreamer streams over UDP as a stand-in for the
+sensor-to-ISP-to-V4L2 chain above; everything from the GStreamer layer
+downstream — capture, stitching, detection, blind-spot logic — is the
+same code that would run against a real MLSoC feed.
 
 **And it holds up live, not just on the dataset:** run against a real
 GStreamer feed instead of files on disk, the pipeline delivers the same
